@@ -18,11 +18,13 @@ pytest -k txn -x                                   # one area, stop on first fai
 
 ## The five that are unrecoverable
 
-1. **Every query filters by `user_id`.** FastAPI uses the service-role key, which has
-   `BYPASSRLS` — the database's 136 RLS policies guard the client's key and do nothing
-   for us. Tenancy is enforced here or nowhere. `user_id` comes only from the verified
-   JWT, never from a body, param or path. A missing filter leaks one brother's spending
-   to another.
+1. **Every query filters by `user_id`.** SQLAlchemy connects straight to Postgres over
+   `DATABASE_URL` as the `postgres` role, which has `BYPASSRLS`. No API key is involved —
+   `service_role` is a PostgREST/`supabase-js` concept and never enters this request
+   path. So the database's 136 RLS policies guard the publishable key in the client
+   bundle and do **nothing** for us. Tenancy is enforced here or nowhere. `user_id` comes
+   only from the verified JWT, never from a body, param or path. A missing filter leaks
+   one brother's spending to another.
 2. **Money is `BIGINT` paise, always positive.** Never float. Sign lives in `direction`
    (`in`/`out`/`transfer`), never in the number. A negative amount is a bug, not a refund.
 3. **Migrations only.** Schema lives in `../penny-pulse-migrations/`, applied by Supabase

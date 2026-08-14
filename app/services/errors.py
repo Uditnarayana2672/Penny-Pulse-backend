@@ -26,6 +26,18 @@ class UnauthenticatedError(DomainError):
     status_code = 401
 
 
+class AuthUnavailableError(DomainError):
+    """The JWKS endpoint could not be reached, so no token can be verified.
+
+    Deliberately not a 401. The token may well be perfectly valid — Supabase is simply
+    unreachable — and answering "unauthenticated" tells four users they have been logged
+    out, sending them to a login screen that cannot work either. A 503 says retry.
+    """
+
+    code = "auth_unavailable"
+    status_code = 503
+
+
 class NotFoundError(DomainError):
     """Row does not exist, or belongs to another user.
 
@@ -50,6 +62,22 @@ class OnboardingRequiredError(ForbiddenError):
     code = "onboarding_required"
 
     def __init__(self, message: str = "Profile has not been created yet.") -> None:
+        super().__init__(message)
+
+
+class OnboardingAlreadyCompleteError(DomainError):
+    """A second onboarding bootstrap for a profile that already finished one.
+
+    Replaying the call with the *same* client-generated ids is not an error — it returns
+    the existing state, which is what makes a queued offline POST safe to retry. This is
+    the other case: a genuinely different bootstrap arriving against a completed profile,
+    which would silently duplicate every category and orphan the first budget period.
+    """
+
+    code = "onboarding_already_complete"
+    status_code = 409
+
+    def __init__(self, message: str = "Onboarding has already been completed.") -> None:
         super().__init__(message)
 
 

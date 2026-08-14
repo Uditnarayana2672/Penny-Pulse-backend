@@ -36,6 +36,7 @@ owns its own wording.
 | `403` | Authenticated but not permitted |
 | `404` | Row does not exist **or belongs to another user** — never `403`, it leaks existence |
 | `401` | Missing, invalid or expired token |
+| `503` | Token signing keys unreachable — the token may be fine, so never `401` |
 
 Exceptions are logged with a trace and an ID. The ID goes to the client; the trace does not.
 
@@ -61,14 +62,28 @@ Validators here check shape, type and range only — `amount_minor: int = Field(
 The client authenticates with `supabase-js` and sends the Supabase access token as
 `Authorization: Bearer <jwt>`.
 
-- Verify the JWT signature **locally** against the project JWT secret. No network call to
-  Supabase per request.
+- Verify the signature **locally** against the project's published public key, fetched
+  once from `{SUPABASE_URL}/auth/v1/.well-known/jwks.json` and cached in-process. No
+  network call to Supabase on the request path.
+- Tokens are **ES256**. There is no shared JWT secret — Supabase marks the legacy HS256
+  secret as not for production, and this project does not carry one. The accepted
+  algorithm list is exactly `["ES256"]`; widening it is how algorithm confusion gets in,
+  because the verifying key is public by definition.
+- Rotating the signing key in the dashboard needs no redeploy and signs nobody out: an
+  unrecognised `kid` refetches the key set once before failing.
+- `iss` and `aud` are both verified. A trailing slash on `SUPABASE_URL` breaks `iss` for
+  every token, so `app/config.py` strips it.
 - `sub` claim becomes `user_id`. It is the only source of identity — never a body field,
   query param or path segment.
 - Valid token but no `profile` row → `403` with `code: "onboarding_required"`.
+- JWKS unreachable → `503` with `code: "auth_unavailable"`. Never `401`: the token is
+  probably valid, and "logged out" sends four users to a login screen that cannot work
+  either.
 - The client uses Supabase for **auth only** and never reads or writes tables directly
   (delta D1). If a feature seems to need direct table access, it needs an endpoint here.
-- The service-role key never appears in a response, a log, or an error message.
+- The client bundle ships the `sb_publishable_...` key, not the legacy `anon` key.
+- Tokens, signing keys and the database password never appear in a response, a log, or an
+  error message.
 
 ## Session
 

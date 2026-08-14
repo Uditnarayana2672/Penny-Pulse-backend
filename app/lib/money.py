@@ -40,6 +40,43 @@ def split_evenly(total_minor: int, parts: int) -> list[int]:
     return [base + 1 if index < remainder else base for index in range(parts)]
 
 
+def split_by_shares(total_minor: int, shares: list[int]) -> list[int]:
+    """Split a total across weighted parts so the parts sum back to it exactly.
+
+    Each part gets `total_minor * share / sum(shares)` floored, and the paise left over go
+    to the largest fractional remainders first — the largest-remainder method. Flooring
+    alone leaves the parts short by up to `len(shares) - 1` paise, which is how a budget's
+    category limits end up disagreeing with the bucket target they were derived from.
+
+    `shares` are weights, not percentages: they need not sum to 100, and the seeded
+    `category_template.suggested_share_pct` column deliberately does not.
+
+    Unlike `split_evenly` a total of zero is allowed, because a bucket percentage of zero
+    is a legitimate allocation rather than a mistake.
+    """
+    if total_minor < 0:
+        raise ValueError("total_minor must not be negative")
+    if not shares:
+        raise ValueError("shares must not be empty")
+    if any(share < 0 for share in shares):
+        raise ValueError("shares must not be negative")
+
+    total_shares = sum(shares)
+    if total_shares == 0:
+        raise ValueError("shares must not sum to zero; the caller decides what that means")
+
+    scaled = [total_minor * share for share in shares]
+    allocated = [value // total_shares for value in scaled]
+    remainders = [value % total_shares for value in scaled]
+
+    # Ties go to the earlier index so the same input always produces the same split.
+    order = sorted(range(len(shares)), key=lambda index: (-remainders[index], index))
+    for index in order[: total_minor - sum(allocated)]:
+        allocated[index] += 1
+
+    return allocated
+
+
 def apply_basis_points(amount_minor: int, basis_points: int) -> int:
     """`basis_points` of `amount_minor`, truncated toward zero.
 

@@ -8,6 +8,8 @@ __pycache__/
 htmlcov/
 .env
 .env.local
+# A pasted access token is a live credential for about an hour.
+token.txt
 *.egg-info/
 dist/
 build/

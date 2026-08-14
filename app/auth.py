@@ -1,22 +1,55 @@
 import logging
+from functools import lru_cache
 from typing import Annotated
 from uuid import UUID
 
 import jwt
 from fastapi import Depends
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
+from jwt import PyJWKClient
+from jwt.exceptions import PyJWKClientConnectionError, PyJWKClientError
 from sqlalchemy.orm import Session
 
 from app.config import Settings, get_settings
 from app.db import get_db
 from app.models.profile import Profile
 from app.repositories import profile as profile_repo
-from app.services.errors import OnboardingRequiredError, UnauthenticatedError
+from app.services.errors import (
+    AuthUnavailableError,
+    OnboardingRequiredError,
+    UnauthenticatedError,
+)
 
 logger = logging.getLogger(__name__)
 
 # auto_error=False so a missing header produces our envelope, not FastAPI's `detail`.
 bearer_scheme = HTTPBearer(auto_error=False)
+
+# Supabase signs access tokens with an asymmetric key (ES256, P-256) and publishes the
+# public half at the JWKS endpoint. Exactly one algorithm is accepted: the endpoint
+# offers one key, and a wider list is how algorithm-confusion attacks get in.
+JWT_ALGORITHMS = ["ES256"]
+
+
+@lru_cache
+def get_jwk_client() -> PyJWKClient:
+    """One client per process, holding the cached JWK set.
+
+    Verification stays local — this is not a call to Supabase per request. The set is
+    refetched when it ages out, and `get_signing_key_from_jwt` refetches immediately on
+    an unrecognised `kid`, so rotating the key in the dashboard needs no redeploy and
+    signs nobody out.
+
+    `timeout` overrides PyJWT's 30-second default because this runs inside the request
+    path: an unreachable endpoint should fail fast into a 503, not hang the request.
+    """
+    settings = get_settings()
+    return PyJWKClient(
+        settings.supabase_jwks_url,
+        cache_jwk_set=True,
+        lifespan=600,
+        timeout=5,
+    )
 
 
 def current_user_id(
@@ -28,18 +61,32 @@ def current_user_id(
     This is the only source of identity in the application. A `user_id` in a body,
     query param or path segment is one brother reading another's spending.
 
-    The signature is checked here against the project JWT secret — no network call to
-    Supabase per request.
+    The signature is checked against the project's published public key — no shared
+    secret, and no network call to Supabase on the request path.
     """
     if credentials is None:
         raise UnauthenticatedError("Authorization header missing.")
 
     try:
+        signing_key = get_jwk_client().get_signing_key_from_jwt(credentials.credentials)
+    except PyJWKClientConnectionError:
+        # Not the caller's fault, so not a 401. Logged without the token.
+        logger.warning("jwks endpoint unreachable url=%s", settings.supabase_jwks_url)
+        raise AuthUnavailableError("Could not reach the token signing keys.") from None
+    except PyJWKClientError:
+        # PyJWKClientError is NOT an InvalidTokenError, so it has to be caught here or
+        # an unknown `kid` becomes a 500 instead of a 401.
+        raise UnauthenticatedError("Token was signed by an unknown key.") from None
+    except jwt.InvalidTokenError:
+        raise UnauthenticatedError("Token is malformed.") from None
+
+    try:
         claims = jwt.decode(
             credentials.credentials,
-            settings.supabase_jwt_secret,
-            algorithms=["HS256"],
+            signing_key.key,
+            algorithms=JWT_ALGORITHMS,
             audience=settings.supabase_jwt_audience,
+            issuer=settings.supabase_issuer,
         )
     except jwt.ExpiredSignatureError:
         raise UnauthenticatedError("Token has expired.") from None
