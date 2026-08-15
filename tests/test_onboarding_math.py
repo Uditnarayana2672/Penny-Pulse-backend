@@ -9,10 +9,13 @@ from datetime import date
 import pytest
 
 from app.lib.money import split_by_shares
+from app.services.errors import DomainError
 from app.services.onboarding import (
     build_preview,
     bucket_percentages,
+    decide_bootstrap,
     effective_limit_minor,
+    raise_for_bootstrap,
     template_from_row,
     unallocated_note,
 )
@@ -202,6 +205,54 @@ def test_a_month_start_day_past_the_twenty_eighth_is_refused():
     # 1..28 so that every calendar month contains one. February decides this.
     with pytest.raises(ValueError):
         build_preview(2_625_000, 29, templates("food"), date(2026, 8, 11))
+
+
+def test_the_same_bootstrap_arriving_twice_is_a_replay():
+    """The period id is the idempotency key, so its presence decides this on its own."""
+    assert (
+        decide_bootstrap(period_is_mine=True, profile_exists=True, period_id_is_taken=True)
+        == "replay"
+    )
+    assert raise_for_bootstrap("replay") is None
+
+
+def test_a_different_bootstrap_against_a_finished_profile_conflicts():
+    action = decide_bootstrap(
+        period_is_mine=False, profile_exists=True, period_id_is_taken=False
+    )
+
+    assert action == "already_complete"
+    with pytest.raises(DomainError) as caught:
+        raise_for_bootstrap(action)
+    assert caught.value.status_code == 409
+    assert caught.value.code == "onboarding_already_complete"
+
+
+def test_a_period_id_belonging_to_another_user_is_refused_rather_than_crashing():
+    """This is the case that used to answer 500.
+
+    `budget_period.id` is a global primary key, so an id another user already holds can never
+    be inserted: `ON CONFLICT (id) DO NOTHING` wrote nothing and the read-back then failed an
+    assertion. The client's recovery is a fresh UUIDv7, so it is a 422.
+    """
+    action = decide_bootstrap(
+        period_is_mine=False, profile_exists=False, period_id_is_taken=True
+    )
+
+    assert action == "period_id_taken"
+    with pytest.raises(DomainError) as caught:
+        raise_for_bootstrap(action)
+    assert caught.value.status_code == 422
+    assert caught.value.field == "budget.budget_period_id"
+
+
+def test_a_first_bootstrap_with_a_free_id_is_created():
+    action = decide_bootstrap(
+        period_is_mine=False, profile_exists=False, period_id_is_taken=False
+    )
+
+    assert action == "create"
+    assert raise_for_bootstrap(action) is None
 
 
 def test_weighted_shares_sum_back_to_the_total_they_were_split_from():

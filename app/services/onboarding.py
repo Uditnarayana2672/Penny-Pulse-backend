@@ -11,22 +11,35 @@ mocking, and passing it in means none of these functions need it mocked at all.
 
 from dataclasses import dataclass
 from datetime import date, datetime
+from typing import Literal
 from uuid import UUID
 
 from app.lib.dates import days_in_period, period_bounds, to_local_date
 from app.lib.money import split_by_shares
 from app.schemas.onboarding import (
+    AccountOut,
+    BucketAllocationOut,
+    BudgetLimitOut,
+    BudgetPeriodOut,
+    CategoryOut,
+    CategoryTemplateOut,
+    CategoryTemplatesOut,
     OnboardingAccountIn,
     OnboardingCategoryIn,
     OnboardingCompleteIn,
+    OnboardingCompleteOut,
+    PeriodOut,
+    PreviewBudgetOut,
+    SuggestedLimitOut,
 )
 from app.services.errors import (
     CurrencyNotSupportedError,
-    DomainError,
     ExcludedCategoryNotBudgetableError,
     IncomeCategoryNotBudgetableError,
+    OnboardingAlreadyCompleteError,
     RuleViolationError,
 )
+from app.services.me import profile_out
 
 # The same union appears in the repository. Two occurrences is inside the "three before
 # extracting" rule, and a shared alias would need a module both layers may import — a new
@@ -269,18 +282,6 @@ def local_today(timezone: str, now: datetime) -> date:
     return to_local_date(now, timezone)
 
 
-def require_minor_unit(code: str, minor_unit: int | None) -> int:
-    """Assert the currency reference row was actually found.
-
-    Migration 0009 seeds INR and every write path checks the code against
-    `enabled_currency_codes` first, so a missing row here means the reference data is gone —
-    a broken database rather than a bad request, hence a 500 and not a 422.
-    """
-    if minor_unit is None:
-        raise DomainError(f"Currency {code} is missing from the reference table.")
-    return minor_unit
-
-
 def select_expense_templates(keys: list[str], offered: dict[str, Template]) -> list[Template]:
     """Resolve requested template keys, rejecting anything not on offer."""
     selected: list[Template] = []
@@ -460,6 +461,165 @@ def build_rows(
         },
         budget_limits=limit_rows,
     )
+
+
+BootstrapAction = Literal["create", "replay", "period_id_taken", "already_complete"]
+
+
+def decide_bootstrap(
+    *, period_is_mine: bool, profile_exists: bool, period_id_is_taken: bool
+) -> BootstrapAction:
+    """Which of the four things a `POST /onboarding/complete` actually is.
+
+    A pure decision on three booleans the router has already read, deliberately made
+    *before* any insert is issued. `ON CONFLICT (id) DO NOTHING` guards only the primary
+    key, so every other outcome has to be resolved here or it reaches `period_no_overlap` —
+    a gist exclusion constraint no `ON CONFLICT` clause can name as an arbiter.
+
+    The period id is tested first because it, not the profile, is the idempotency key: it is
+    present in every request and it is the one whose duplicate is unrecoverable.
+
+    `period_id_taken` is the case that used to be a 500. The id is a global primary key, so
+    one already held by another user can never be inserted — the insert silently wrote
+    nothing and the read-back then failed an assertion. It is answered as a 422 rather than a
+    409 because the client's recovery is to generate a fresh UUIDv7 and retry, which is what
+    a validation failure means, and because saying no more than "this id is unusable" avoids
+    confirming whose it is.
+    """
+    if period_is_mine:
+        return "replay"
+    if profile_exists:
+        return "already_complete"
+    if period_id_is_taken:
+        return "period_id_taken"
+    return "create"
+
+
+def raise_for_bootstrap(action: BootstrapAction) -> None:
+    """Turn the two refusing actions into their domain errors.
+
+    Kept beside `decide_bootstrap` so the decision and its consequence cannot drift, and out
+    of the router so no business rule lives at the edge.
+    """
+    if action == "period_id_taken":
+        raise RuleViolationError(
+            "That budget_period_id is already in use. Generate a new one and retry.",
+            field="budget.budget_period_id",
+        )
+    if action == "already_complete":
+        raise OnboardingAlreadyCompleteError()
+
+
+def templates_out(templates: list[Template], template_version: int) -> CategoryTemplatesOut:
+    """The seed set, split by kind because the two lists are offered separately."""
+    return CategoryTemplatesOut(
+        template_version=template_version,
+        expense=[_template_out(t) for t in templates if t.kind == "expense"],
+        income=[_template_out(t) for t in templates if t.kind == "income"],
+    )
+
+
+def _template_out(template: Template) -> CategoryTemplateOut:
+    return CategoryTemplateOut(
+        template_key=template.template_key,
+        name=template.name,
+        short_label=template.short_label,
+        icon=template.icon,
+        colour=template.colour,
+        kind=template.kind,
+        default_bucket=template.default_bucket,
+        flexibility=template.flexibility,
+        suggested_share_pct=template.suggested_share_pct,
+        sort_order=template.sort_order,
+    )
+
+
+def preview_out(preview: BudgetPreview, currency_code: str, minor_unit: int) -> PreviewBudgetOut:
+    """The preview as the wire shape. Every number here was computed by `build_preview`."""
+    return PreviewBudgetOut(
+        currency_code=currency_code,
+        minor_unit=minor_unit,
+        period=PeriodOut(
+            starts_on=preview.starts_on,
+            ends_on=preview.ends_on,
+            days_in_period=preview.days_in_period,
+        ),
+        bucket_allocation=BucketAllocationOut(
+            pct_needs=preview.allocation.percentages["NEEDS"],
+            pct_wants=preview.allocation.percentages["WANTS"],
+            pct_future=preview.allocation.percentages["FUTURE"],
+            pct_debt=preview.allocation.percentages["DEBT"],
+            needs_target_minor=preview.allocation.targets["NEEDS"],
+            wants_target_minor=preview.allocation.targets["WANTS"],
+            future_target_minor=preview.allocation.targets["FUTURE"],
+            debt_target_minor=preview.allocation.targets["DEBT"],
+        ),
+        suggested_limits=[
+            SuggestedLimitOut(
+                template_key=limit.template_key,
+                default_bucket=limit.default_bucket,
+                limit_minor=limit.limit_minor,
+            )
+            for limit in preview.suggested_limits
+        ],
+        allocated_total_minor=preview.allocated_total_minor,
+        unallocated_minor=preview.unallocated_minor,
+        unallocated_note=unallocated_note(preview),
+    )
+
+
+def complete_out(
+    *,
+    minor_unit: int,
+    profile: RowDict,
+    categories: list[RowDict],
+    accounts: list[RowDict],
+    budget_period: RowDict,
+    budget_limits: list[RowDict],
+) -> OnboardingCompleteOut:
+    """Everything the client needs to render Home and the entry screen without a second call.
+
+    The two derived fields are computed here rather than at the edge: `days_in_period` is
+    period arithmetic and `effective_limit_minor` is money arithmetic, and `api.md` allows a
+    router neither.
+    """
+    currency_code = str(budget_period["currency_code"]).strip()
+    starts_on = budget_period["starts_on"]
+    ends_on = budget_period["ends_on"]
+    if not isinstance(starts_on, date) or not isinstance(ends_on, date):
+        raise AssertionError("budget period bounds must be dates")
+
+    return OnboardingCompleteOut(
+        currency_code=currency_code,
+        minor_unit=minor_unit,
+        profile=profile_out(profile),
+        categories=[CategoryOut(**row) for row in categories],
+        accounts=[AccountOut(**row) for row in accounts],
+        budget_period=BudgetPeriodOut(
+            **budget_period,
+            days_in_period=days_in_period(starts_on, ends_on),
+        ),
+        budget_limits=[
+            BudgetLimitOut(
+                **row,
+                effective_limit_minor=effective_limit_minor(
+                    _as_int(row["limit_minor"]), _as_int(row["carried_in_minor"])
+                ),
+            )
+            for row in budget_limits
+        ],
+    )
+
+
+def _as_int(value: RowValue) -> int:
+    """Narrow a money column to `int` before arithmetic.
+
+    `BIGINT` always arrives as `int`; this exists so the addition in `effective_limit_minor`
+    is never handed a `None` from a column that changed nullability under it.
+    """
+    if not isinstance(value, int):
+        raise AssertionError("money columns must be integers")
+    return value
 
 
 def _build_limit_rows(

@@ -12,8 +12,8 @@ from sqlalchemy.orm import Session
 
 from app.config import Settings, get_settings
 from app.db import get_db
-from app.models.profile import Profile
 from app.repositories import profile as profile_repo
+from app.repositories.profile import RowDict
 from app.services.errors import (
     AuthUnavailableError,
     OnboardingRequiredError,
@@ -113,7 +113,7 @@ UserId = Annotated[UUID, Depends(current_user_id)]
 def current_profile(
     user_id: UserId,
     db: Annotated[Session, Depends(get_db)],
-) -> Profile:
+) -> RowDict:
     """A valid token with no `profile` row means onboarding has not run yet."""
     profile = profile_repo.get_profile(db, user_id)
     if profile is None:
@@ -121,5 +121,11 @@ def current_profile(
     return profile
 
 
-CurrentProfile = Annotated[Profile, Depends(current_profile)]
+CurrentProfile = Annotated[RowDict, Depends(current_profile)]
+
+# `sqlalchemy.orm.Session` is the one ORM name this module imports, and it is here because
+# this alias has nowhere else to live: `api.md` bans `sqlalchemy` from the edge and
+# `repositories.md` bans `fastapi` from `app/db.py`, so an `Annotated[Session, Depends(...)]`
+# is illegal in both homes the rules offer. Left here, where it already was, rather than
+# adding a module outside the five to hold one line.
 DbSession = Annotated[Session, Depends(get_db)]

@@ -193,50 +193,118 @@ def _owned_by(row: RowDict, user_id: UUID) -> RowDict:
     return {**row, "user_id": user_id}
 
 
-def get_budget_period(
-    db: Session, user_id: UUID, budget_period_id: UUID
-) -> BudgetPeriod | None:
+def get_budget_period(db: Session, user_id: UUID, budget_period_id: UUID) -> RowDict | None:
     """Whether this exact period already exists for this user.
 
     This is the idempotency probe for `POST /onboarding/complete`. It has to run before any
     insert: a replay carrying a *different* period id would otherwise hit
     `period_no_overlap`, a gist exclusion constraint that `ON CONFLICT` cannot name as an
     arbiter, and the user would get a 500 instead of an answer.
+
+    `currency_code` is selected although `BudgetPeriodOut` does not carry it: the response
+    reports the currency once at the root, and this row is where it comes from.
     """
-    stmt = select(BudgetPeriodLive).where(
+    stmt = select(
+        BudgetPeriodLive.id,
+        BudgetPeriodLive.starts_on,
+        BudgetPeriodLive.ends_on,
+        BudgetPeriodLive.currency_code,
+        BudgetPeriodLive.expected_income_minor,
+        BudgetPeriodLive.pct_needs,
+        BudgetPeriodLive.pct_wants,
+        BudgetPeriodLive.pct_future,
+        BudgetPeriodLive.pct_debt,
+        BudgetPeriodLive.carried_from_budget_period_id,
+        BudgetPeriodLive.review_dismissed_at,
+        BudgetPeriodLive.created_at,
+        BudgetPeriodLive.updated_at,
+        BudgetPeriodLive.version,
+    ).where(
         BudgetPeriodLive.user_id == user_id,
         BudgetPeriodLive.id == budget_period_id,
     )
-    return db.execute(stmt).scalar_one_or_none()
+
+    row = db.execute(stmt).mappings().one_or_none()
+    return None if row is None else dict(row)
 
 
-def list_categories(db: Session, user_id: UUID) -> list[Category]:
+def period_id_exists_for_anyone(db: Session, budget_period_id: UUID) -> bool:
+    """Whether this period id is taken, ignoring who owns it.
+
+    A deliberate second exception to the every-function-filters-`user_id` rule, and the only
+    one that reads a row it does not own. It answers a question about the id space, not about
+    a tenant: `budget_period.id` is a global primary key, so a client-generated id that
+    already belongs to somebody else can never be inserted.
+
+    Without this the caller cannot tell "replay mine" from "collides with a stranger's" and
+    the second case reaches `ON CONFLICT (id) DO NOTHING`, writes nothing, and then fails an
+    assertion on the read-back — a 500 for what is a conflict. No column but the id is read,
+    so nothing about the other user's period is exposed.
+    """
+    stmt = select(BudgetPeriodLive.id).where(BudgetPeriodLive.id == budget_period_id)
+    return db.execute(stmt).scalar_one_or_none() is not None
+
+
+def list_categories(db: Session, user_id: UUID) -> list[RowDict]:
     stmt = (
-        select(CategoryLive)
+        select(
+            CategoryLive.id,
+            CategoryLive.name,
+            CategoryLive.short_label,
+            CategoryLive.icon,
+            CategoryLive.colour,
+            CategoryLive.kind,
+            CategoryLive.default_bucket,
+            CategoryLive.flexibility,
+            CategoryLive.template_key,
+            CategoryLive.is_pinned,
+            CategoryLive.is_system,
+            CategoryLive.is_archived,
+            CategoryLive.parent_id,
+            CategoryLive.created_at,
+            CategoryLive.updated_at,
+            CategoryLive.version,
+        )
         .where(CategoryLive.user_id == user_id)
         .order_by(CategoryLive.kind, CategoryLive.sort_order, CategoryLive.name)
     )
-    return list(db.execute(stmt).scalars())
+    return [dict(row) for row in db.execute(stmt).mappings()]
 
 
-def list_accounts(db: Session, user_id: UUID) -> list[Account]:
+def list_accounts(db: Session, user_id: UUID) -> list[RowDict]:
     stmt = (
-        select(AccountLive)
+        select(
+            AccountLive.id,
+            AccountLive.name,
+            AccountLive.type,
+            AccountLive.icon,
+            AccountLive.is_default,
+            AccountLive.is_archived,
+            AccountLive.created_at,
+            AccountLive.updated_at,
+            AccountLive.version,
+        )
         .where(AccountLive.user_id == user_id)
         .order_by(AccountLive.sort_order, AccountLive.name)
     )
-    return list(db.execute(stmt).scalars())
+    return [dict(row) for row in db.execute(stmt).mappings()]
 
 
-def list_budget_limits(
-    db: Session, user_id: UUID, budget_period_id: UUID
-) -> list[BudgetLimit]:
+def list_budget_limits(db: Session, user_id: UUID, budget_period_id: UUID) -> list[RowDict]:
     stmt = (
-        select(BudgetLimitLive)
+        select(
+            BudgetLimitLive.id,
+            BudgetLimitLive.category_id,
+            BudgetLimitLive.limit_minor,
+            BudgetLimitLive.carried_in_minor,
+            BudgetLimitLive.rollover,
+            BudgetLimitLive.rollover_cap_minor,
+            BudgetLimitLive.version,
+        )
         .where(
             BudgetLimitLive.user_id == user_id,
             BudgetLimitLive.budget_period_id == budget_period_id,
         )
         .order_by(BudgetLimitLive.category_id)
     )
-    return list(db.execute(stmt).scalars())
+    return [dict(row) for row in db.execute(stmt).mappings()]
