@@ -133,6 +133,11 @@ def as_uuid(value: RowValue, column: str) -> UUID:
     return value
 
 
+def as_str_or_none(value: RowValue) -> str | None:
+    """A nullable TEXT column, without turning None into the string "None"."""
+    return None if value is None else str(value)
+
+
 def require_version_match(if_match: int | None, profile: RowDict) -> None:
     """Optimistic concurrency, opt-in.
 

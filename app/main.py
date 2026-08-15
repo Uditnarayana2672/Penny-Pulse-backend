@@ -8,7 +8,7 @@ from fastapi.responses import JSONResponse
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from app.config import get_settings
-from app.routers import health, me, onboarding, txn
+from app.routers import category, health, me, onboarding, txn
 from app.services.errors import DomainError
 
 API_PREFIX = "/api/v1"
@@ -34,6 +34,7 @@ app.include_router(health.router, prefix=API_PREFIX)
 app.include_router(me.router, prefix=API_PREFIX)
 app.include_router(onboarding.router, prefix=API_PREFIX)
 app.include_router(txn.router, prefix=API_PREFIX)
+app.include_router(category.router, prefix=API_PREFIX)
 
 
 def error_response(
