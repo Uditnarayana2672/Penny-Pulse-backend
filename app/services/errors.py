@@ -94,6 +94,29 @@ class OnboardingAlreadyCompleteError(DomainError):
         super().__init__(message)
 
 
+class VersionConflictError(DomainError):
+    """An `If-Match` version that no longer matches the stored row.
+
+    The header is optional (spec §2.1): omitting it is last-write-wins, which is what a
+    Phase 1 client does. Sending it opts into detection, and this is the answer.
+
+    The spec asks for "the current resource in `details`", which `.claude/rules/api.md`
+    does not sanction — its envelope is exactly `code`, `message`, `field`, "no
+    exceptions". The rules file wins, so the current state is not echoed here; a client
+    that sees this re-reads `GET /me`, which it needs to do anyway to show the user what
+    the other device wrote.
+    """
+
+    code = "version_conflict"
+    status_code = 409
+
+    def __init__(self, expected: int, actual: int) -> None:
+        super().__init__(
+            f"Profile has version {actual}, but If-Match asked for {expected}.",
+            field="If-Match",
+        )
+
+
 class RuleViolationError(DomainError):
     """A business rule that needed another row, the clock, or a decision.
 

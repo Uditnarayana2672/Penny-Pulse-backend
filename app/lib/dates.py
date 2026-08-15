@@ -45,6 +45,22 @@ def days_in_period(start: date, end_inclusive: date) -> int:
     return (end_inclusive - start).days + 1
 
 
+def next_occurrence_on_or_after(day: date, day_of_month: int) -> date:
+    """The first date on or after `day` whose day-of-month is `day_of_month`.
+
+    Used when `month_start_day` changes: the next period begins at the first occurrence of
+    the new salary date, and the current period is extended to the day before it.
+
+    `day_of_month` is 1..28 for the same reason as in `period_bounds` — every month has
+    one, so `replace(day=...)` can never construct an invalid date.
+    """
+    if not 1 <= day_of_month <= 28:
+        raise ValueError("day_of_month must be between 1 and 28")
+
+    candidate = day.replace(day=day_of_month)
+    return candidate if candidate >= day else _next_month(candidate)
+
+
 def _next_month(day: date) -> date:
     if day.month == 12:
         return day.replace(year=day.year + 1, month=1)

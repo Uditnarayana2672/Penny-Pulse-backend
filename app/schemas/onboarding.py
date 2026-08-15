@@ -7,38 +7,19 @@ layer.
 """
 
 from datetime import date, datetime
-from typing import Annotated, Literal, Self
+from typing import Literal, Self
 from uuid import UUID
 
-from pydantic import AfterValidator, BaseModel, Field, model_validator
+from pydantic import BaseModel, Field, model_validator
 
 from app.lib.dates import DEFAULT_TIMEZONE
-from app.schemas.me import ProfileOut
-from app.services.errors import (
-    BucketPercentagesInvalidError,
-    InvalidMonthStartDayError,
-)
+from app.schemas.me import MonthStartDay, ProfileOut
+from app.services.errors import BucketPercentagesInvalidError
 
 Bucket = Literal["NEEDS", "WANTS", "FUTURE", "DEBT", "EXCLUDED"]
 Kind = Literal["income", "expense"]
 Rollover = Literal["none", "carry", "carry_capped"]
 AccountType = Literal["cash", "bank", "wallet", "credit_card", "loan", "investment"]
-
-
-def _check_month_start_day(value: int) -> int:
-    """1..28, with its own error code rather than a generic validation failure.
-
-    The range is enforced here instead of as `Field(ge=1, le=28)` because a `Field`
-    constraint fails before any validator runs and can only ever report
-    `validation_failed`. The bound is a real rule the client explains to the user — 29, 30
-    and 31 do not exist in February — so it gets the code the spec names for it.
-    """
-    if not 1 <= value <= 28:
-        raise InvalidMonthStartDayError(value)
-    return value
-
-
-MonthStartDay = Annotated[int, AfterValidator(_check_month_start_day)]
 
 
 class CategoryTemplateOut(BaseModel):
