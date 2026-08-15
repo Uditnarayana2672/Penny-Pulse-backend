@@ -31,6 +31,20 @@ bearer_scheme = HTTPBearer(auto_error=False)
 # offers one key, and a wider list is how algorithm-confusion attacks get in.
 JWT_ALGORITHMS = ["ES256"]
 
+# Clock skew tolerance on `iat`, `nbf` and `exp`.
+#
+# Not optional. Supabase stamps `iat` from its own clock, and PyJWT 2.13 rejects any `iat`
+# in the future with **zero** tolerance — so a machine one second behind Supabase fails
+# every single token with `ImmatureSignatureError`. That is not a hypothetical: this backend
+# rejected every real token until this line existed, while the auth tests passed throughout
+# because they mint their tokens from the same clock that verifies them.
+#
+# RFC 7519 sanctions "a small leeway, usually no more than a few minutes" for exactly this.
+# Sixty seconds covers ordinary NTP drift. The cost is that a token stays acceptable for a
+# minute past `exp`, which against a one-hour token that supabase-js refreshes silently is
+# not a meaningful window.
+JWT_LEEWAY_SECONDS = 60
+
 
 @lru_cache
 def get_jwk_client() -> PyJWKClient:
@@ -88,13 +102,17 @@ def current_user_id(
             algorithms=JWT_ALGORITHMS,
             audience=settings.supabase_jwt_audience,
             issuer=settings.supabase_issuer,
+            leeway=JWT_LEEWAY_SECONDS,
         )
     except jwt.ExpiredSignatureError:
         # Its own code, not `unauthenticated`: the client refreshes the Supabase session
         # and retries, rather than sending a signed-in user back to the login screen.
         raise TokenExpiredError("Token has expired.") from None
-    except jwt.InvalidTokenError:
-        # The token itself is never logged.
+    except jwt.InvalidTokenError as error:
+        # The exception class, never the token and never a claim. "Token is invalid" alone
+        # is unactionable: a clock-skew rejection and a forged signature read identically to
+        # whoever is holding the logs, and telling them apart took a live token to discover.
+        logger.warning("token rejected reason=%s", type(error).__name__)
         raise UnauthenticatedError("Token is invalid.") from None
 
     subject = claims.get("sub")

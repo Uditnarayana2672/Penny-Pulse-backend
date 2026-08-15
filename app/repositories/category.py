@@ -11,6 +11,7 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.models.core import CategoryLive, TxnLive
+from app.repositories.txn import summed_paise
 
 RowValue = str | int | bool | UUID | date | datetime | None
 RowDict = dict[str, RowValue]
@@ -74,7 +75,7 @@ def list_categories(
         select(
             TxnLive.category_id.label("category_id"),
             func.count().label("period_count"),
-            func.coalesce(func.sum(TxnLive.amount_minor), 0).label("period_spent"),
+            summed_paise(TxnLive.amount_minor).label("period_spent"),
         )
         .where(
             TxnLive.user_id == user_id,

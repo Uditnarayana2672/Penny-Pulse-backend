@@ -85,7 +85,9 @@ def test_a_missing_header_is_unauthenticated(settings):
 
 
 def test_an_expired_token_is_rejected(private_key, settings):
-    expired = datetime.datetime.now(datetime.UTC) - datetime.timedelta(seconds=1)
+    # Two minutes stale, not one second: verification allows JWT_LEEWAY_SECONDS of clock
+    # skew, so a token a second past `exp` is still inside the tolerance by design.
+    expired = datetime.datetime.now(datetime.UTC) - datetime.timedelta(minutes=2)
 
     with pytest.raises(UnauthenticatedError) as caught:
         current_user_id(bearer(make_token(private_key, exp=expired)), settings)
@@ -195,3 +197,47 @@ def test_an_unreachable_jwks_endpoint_is_a_503_not_a_401(monkeypatch, private_ke
 
     assert caught.value.status_code == 503
     assert caught.value.code == "auth_unavailable"
+
+
+def test_a_token_issued_a_moment_in_the_future_is_accepted(private_key, settings):
+    """The bug that made every real token fail.
+
+    Supabase stamps `iat` from its own clock. PyJWT 2.13 rejects any `iat` in the future with
+    zero tolerance, so a machine one second behind Supabase failed every token with
+    `ImmatureSignatureError` — reported as "logged in and it went blank". None of the other
+    tests in this file catch it, because `make_token` omits `iat` entirely and PyJWT only
+    validates the claim when it is present.
+    """
+    just_ahead = datetime.datetime.now(datetime.UTC) + datetime.timedelta(seconds=5)
+    user_id = uuid.uuid4()
+
+    result = current_user_id(
+        bearer(make_token(private_key, sub=str(user_id), iat=just_ahead)), settings
+    )
+
+    assert result == user_id
+
+
+def test_a_token_issued_far_in_the_future_is_still_rejected(private_key, settings):
+    """The leeway is a tolerance for clock drift, not an open door."""
+    far_ahead = datetime.datetime.now(datetime.UTC) + datetime.timedelta(hours=1)
+
+    with pytest.raises(UnauthenticatedError) as caught:
+        current_user_id(bearer(make_token(private_key, iat=far_ahead)), settings)
+
+    assert caught.value.code == "unauthenticated"
+
+
+def test_a_token_valid_a_moment_ago_is_accepted(private_key, settings):
+    """The same tolerance on the other end: a token barely past `exp` is not a login screen.
+
+    A user whose clock is a few seconds fast would otherwise be signed out early.
+    """
+    barely_stale = datetime.datetime.now(datetime.UTC) - datetime.timedelta(seconds=5)
+    user_id = uuid.uuid4()
+
+    result = current_user_id(
+        bearer(make_token(private_key, sub=str(user_id), exp=barely_stale)), settings
+    )
+
+    assert result == user_id

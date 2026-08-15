@@ -10,7 +10,7 @@ repeating `deleted_at IS NULL`; writes go to the tables.
 from datetime import date, datetime
 from uuid import UUID, uuid4
 
-from sqlalchemy import Select, func, select
+from sqlalchemy import BigInteger, Select, cast, func, select
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import Session
 
@@ -25,6 +25,23 @@ from app.models.habit import HabitLog, Streak
 
 RowValue = str | int | bool | UUID | date | datetime | None
 RowDict = dict[str, RowValue]
+
+
+def summed_paise(column: object) -> object:
+    """`SUM` of a money column, as an integer rather than a `Decimal`.
+
+    Postgres widens `sum(bigint)` to `numeric` to avoid overflow, so psycopg hands back a
+    `Decimal` and every service that narrows the row to `int` raises. Casting here rather
+    than converting in the service keeps the promise this layer makes: a row holds the type
+    its column holds. Paise are integers, and the cast cannot lose anything — the sum of
+    BIGINTs only exceeds BIGINT at totals no household reaches.
+
+    Found the hard way: `POST /transactions` returned 500 on its first real call because
+    `safe_to_spend_minor` received `Decimal('0')`. No unit test could catch it, because they
+    hand the service Python ints directly.
+    """
+    return cast(func.coalesce(func.sum(column), 0), BigInteger)
+
 
 # The columns `services/txn.py::txn_out` reads. Selected explicitly rather than with `*` so
 # that adding a column to `txn` cannot silently start shipping it to a client — several of
@@ -167,7 +184,7 @@ def _spent_in_period(user_id: UUID, budget_period_id: UUID) -> Select[tuple[UUID
     return (
         select(
             TxnLive.category_id.label("category_id"),
-            func.coalesce(func.sum(TxnLive.amount_minor), 0).label("spent_minor"),
+            summed_paise(TxnLive.amount_minor).label("spent_minor"),
         )
         .where(
             TxnLive.user_id == user_id,
@@ -183,7 +200,7 @@ def category_spent_minor(
     db: Session, user_id: UUID, budget_period_id: UUID, category_id: UUID
 ) -> int:
     """Total spent against one category in one period."""
-    stmt = select(func.coalesce(func.sum(TxnLive.amount_minor), 0)).where(
+    stmt = select(summed_paise(TxnLive.amount_minor)).where(
         TxnLive.user_id == user_id,
         TxnLive.budget_period_id == budget_period_id,
         TxnLive.category_id == category_id,
