@@ -62,6 +62,52 @@ class NotFoundError(DomainError):
     status_code = 404
 
 
+class CategoryNotFoundError(NotFoundError):
+    """No such category, or it belongs to another user.
+
+    Its own code rather than a bare `not_found` because the client shows a specific
+    recovery — reload the category list, the one you had is gone. Still a 404 for a
+    stranger's category: a 403 would confirm it exists.
+    """
+
+    code = "category_not_found"
+
+    def __init__(self) -> None:
+        super().__init__("Category does not exist.", field="category_id")
+
+
+class CategoryArchivedError(DomainError):
+    """The category is real and the caller's, but archived.
+
+    409 rather than 422: the request is well formed and the conflict is with the state of
+    the row it points at. Mirrors the archived branch of `txn_category_kind_matches`.
+    """
+
+    code = "category_archived"
+    status_code = 409
+
+    def __init__(self) -> None:
+        super().__init__("Category is archived and cannot take new transactions.",
+                         field="category_id")
+
+
+class KindMismatchError(DomainError):
+    """`direction` and the category's `kind` disagree.
+
+    `out` needs an expense category and `in` needs an income one. Cross-table, so the
+    primary check is here and the `txn_category_kind_check` trigger stays the backstop.
+    """
+
+    code = "kind_mismatch"
+    status_code = 409
+
+    def __init__(self, direction: str, kind: str) -> None:
+        super().__init__(
+            f"direction '{direction}' cannot use a category of kind '{kind}'.",
+            field="category_id",
+        )
+
+
 class ForbiddenError(DomainError):
     """Authenticated, the row is theirs, and the action is still not allowed."""
 

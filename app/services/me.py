@@ -107,20 +107,27 @@ class MonthStartDayChange:
     period_to_extend: UUID | None
 
 
-def _as_int(value: RowValue, column: str) -> int:
+# Narrowing a `RowValue` to the type its column actually has. Public rather than private
+# because `services/txn.py` needs the same three, and reaching into another module's
+# underscored names is worse than sharing them deliberately. A row that fails one of these
+# means the repository's select and this module disagree, which is a bug here and not a bad
+# request — hence AssertionError and a 500, not a 422.
+def as_int(value: RowValue, column: str) -> int:
+    # `bool` is a subclass of `int`, and a boolean arriving where an integer belongs is
+    # exactly the kind of column mix-up worth catching.
     if not isinstance(value, int) or isinstance(value, bool):
         raise AssertionError(f"{column} is an integer column")
     return value
 
 
-def _as_date(value: RowValue, column: str) -> date:
+def as_date(value: RowValue, column: str) -> date:
     # `datetime` subclasses `date`, so the order of these checks matters.
     if isinstance(value, datetime) or not isinstance(value, date):
         raise AssertionError(f"{column} is a DATE column")
     return value
 
 
-def _as_uuid(value: RowValue, column: str) -> UUID:
+def as_uuid(value: RowValue, column: str) -> UUID:
     if not isinstance(value, UUID):
         raise AssertionError(f"{column} is a UUID column")
     return value
@@ -133,7 +140,7 @@ def require_version_match(if_match: int | None, profile: RowDict) -> None:
     what a single-device Phase 1 client does. Sending it asks to be told when another
     device got there first.
     """
-    current_version = _as_int(profile["version"], "profile.version")
+    current_version = as_int(profile["version"], "profile.version")
     if if_match is not None and if_match != current_version:
         raise VersionConflictError(expected=if_match, actual=current_version)
 
@@ -182,11 +189,11 @@ def plan_month_start_day_change(
     will start; it comes into existence on the first request for a date inside it (spec
     5.5), and creating it now would also mean guessing its limits.
     """
-    previous_value = _as_int(profile["month_start_day"], "profile.month_start_day")
+    previous_value = as_int(profile["month_start_day"], "profile.month_start_day")
     if "month_start_day" not in patch:
         return None
 
-    requested = _as_int(patch["month_start_day"], "month_start_day")
+    requested = as_int(patch["month_start_day"], "month_start_day")
     if requested == previous_value:
         return None
 
@@ -201,14 +208,14 @@ def plan_month_start_day_change(
             period_to_extend=None,
         )
 
-    ends_on = _as_date(current_period["ends_on"], "budget_period.ends_on")
+    ends_on = as_date(current_period["ends_on"], "budget_period.ends_on")
     next_start = next_occurrence_on_or_after(ends_on + timedelta(days=1), requested)
     return MonthStartDayChange(
         previous_value=previous_value,
         new_value=requested,
         current_period_extended_to=next_start - timedelta(days=1),
         effective_from_period_starts_on=next_start,
-        period_to_extend=_as_uuid(current_period["id"], "budget_period.id"),
+        period_to_extend=as_uuid(current_period["id"], "budget_period.id"),
     )
 
 
