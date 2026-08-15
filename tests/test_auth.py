@@ -87,8 +87,25 @@ def test_a_missing_header_is_unauthenticated(settings):
 def test_an_expired_token_is_rejected(private_key, settings):
     expired = datetime.datetime.now(datetime.UTC) - datetime.timedelta(seconds=1)
 
-    with pytest.raises(UnauthenticatedError):
+    with pytest.raises(UnauthenticatedError) as caught:
         current_user_id(bearer(make_token(private_key, exp=expired)), settings)
+
+    # Its own code, so the client refreshes the session instead of showing a login screen.
+    # Still a subclass of UnauthenticatedError, so nothing treating it as a 401 breaks.
+    assert caught.value.code == "token_expired"
+    assert caught.value.status_code == 401
+
+
+def test_a_forged_token_is_not_reported_as_expired(private_key, settings):
+    """`unauthenticated` and `token_expired` must not be interchangeable.
+
+    A forged token reported as expired would send the client into a refresh loop instead of
+    to the login screen.
+    """
+    with pytest.raises(UnauthenticatedError) as caught:
+        current_user_id(bearer("not-a-jwt"), settings)
+
+    assert caught.value.code == "unauthenticated"
 
 
 def test_a_token_for_another_audience_is_rejected(private_key, settings):

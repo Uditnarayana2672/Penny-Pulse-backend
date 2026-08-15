@@ -20,7 +20,13 @@ from app.schemas.onboarding import (
     OnboardingCategoryIn,
     OnboardingCompleteIn,
 )
-from app.services.errors import DomainError, RuleViolationError
+from app.services.errors import (
+    CurrencyNotSupportedError,
+    DomainError,
+    ExcludedCategoryNotBudgetableError,
+    IncomeCategoryNotBudgetableError,
+    RuleViolationError,
+)
 
 # The same union appears in the repository. Two occurrences is inside the "three before
 # extracting" rule, and a shared alias would need a module both layers may import — a new
@@ -368,9 +374,7 @@ def build_rows(
     """
     currency = payload.profile.preferred_currency_code.upper()
     if currency not in enabled_currency_codes:
-        raise RuleViolationError(
-            f"{currency} is not a supported currency.", field="preferred_currency_code"
-        )
+        raise CurrencyNotSupportedError(currency)
 
     offered = {template.template_key: template for template in offered_templates}
     resolved = resolve_categories(payload.categories, offered)
@@ -479,12 +483,12 @@ def _build_limit_rows(
                 field="budget.limits",
             )
         if template.kind != "expense":
-            raise RuleViolationError(
+            raise IncomeCategoryNotBudgetableError(
                 f"{template.name} is an income category and cannot hold a budget limit.",
                 field="budget.limits",
             )
         if template.default_bucket == "EXCLUDED":
-            raise RuleViolationError(
+            raise ExcludedCategoryNotBudgetableError(
                 f"{template.name} is excluded from budgets and cannot hold a limit.",
                 field="budget.limits",
             )

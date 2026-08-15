@@ -17,6 +17,7 @@ from app.repositories import profile as profile_repo
 from app.services.errors import (
     AuthUnavailableError,
     OnboardingRequiredError,
+    TokenExpiredError,
     UnauthenticatedError,
 )
 
@@ -89,7 +90,9 @@ def current_user_id(
             issuer=settings.supabase_issuer,
         )
     except jwt.ExpiredSignatureError:
-        raise UnauthenticatedError("Token has expired.") from None
+        # Its own code, not `unauthenticated`: the client refreshes the Supabase session
+        # and retries, rather than sending a signed-in user back to the login screen.
+        raise TokenExpiredError("Token has expired.") from None
     except jwt.InvalidTokenError:
         # The token itself is never logged.
         raise UnauthenticatedError("Token is invalid.") from None

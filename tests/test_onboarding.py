@@ -305,8 +305,10 @@ def test_a_budget_limit_on_an_income_category_is_refused(db_client, sign_in, mak
 
     response = db_client.post("/api/v1/onboarding/complete", json=payload)
 
-    assert response.status_code == 422
-    assert response.json()["error"]["code"] == "rule_violation"
+    # 409, not 422: the body is well-formed and the conflict is with the category it
+    # points at. Mirrors the `budget_limit_budgetable` trigger.
+    assert response.status_code == 409
+    assert response.json()["error"]["code"] == "income_category_not_budgetable"
 
 
 def test_a_budget_limit_pointing_outside_the_request_is_refused(db_client, sign_in, make_user):
@@ -332,7 +334,7 @@ def test_bucket_percentages_that_do_not_sum_to_one_hundred_are_refused(
     response = db_client.post("/api/v1/onboarding/complete", json=payload)
 
     assert response.status_code == 422
-    assert response.json()["error"]["code"] == "validation_failed"
+    assert response.json()["error"]["code"] == "bucket_percentages_invalid"
 
 
 def test_a_month_start_day_past_the_twenty_eighth_is_refused(db_client, sign_in, make_user):
@@ -343,7 +345,7 @@ def test_a_month_start_day_past_the_twenty_eighth_is_refused(db_client, sign_in,
     response = db_client.post("/api/v1/onboarding/complete", json=payload)
 
     assert response.status_code == 422
-    assert response.json()["error"]["code"] == "validation_failed"
+    assert response.json()["error"]["code"] == "invalid_month_start_day"
 
 
 def test_an_unsupported_currency_is_refused(db_client, sign_in, make_user):
@@ -354,7 +356,7 @@ def test_an_unsupported_currency_is_refused(db_client, sign_in, make_user):
     response = db_client.post("/api/v1/onboarding/complete", json=payload)
 
     assert response.status_code == 422
-    assert response.json()["error"]["code"] == "rule_violation"
+    assert response.json()["error"]["code"] == "currency_not_supported"
 
 
 def test_two_accounts_with_the_same_name_are_refused(db_client, sign_in, make_user):

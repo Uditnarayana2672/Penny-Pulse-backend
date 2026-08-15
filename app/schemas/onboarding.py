@@ -7,18 +7,38 @@ layer.
 """
 
 from datetime import date, datetime
-from typing import Literal, Self
+from typing import Annotated, Literal, Self
 from uuid import UUID
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import AfterValidator, BaseModel, Field, model_validator
 
 from app.lib.dates import DEFAULT_TIMEZONE
 from app.schemas.me import ProfileOut
+from app.services.errors import (
+    BucketPercentagesInvalidError,
+    InvalidMonthStartDayError,
+)
 
 Bucket = Literal["NEEDS", "WANTS", "FUTURE", "DEBT", "EXCLUDED"]
 Kind = Literal["income", "expense"]
 Rollover = Literal["none", "carry", "carry_capped"]
 AccountType = Literal["cash", "bank", "wallet", "credit_card", "loan", "investment"]
+
+
+def _check_month_start_day(value: int) -> int:
+    """1..28, with its own error code rather than a generic validation failure.
+
+    The range is enforced here instead of as `Field(ge=1, le=28)` because a `Field`
+    constraint fails before any validator runs and can only ever report
+    `validation_failed`. The bound is a real rule the client explains to the user — 29, 30
+    and 31 do not exist in February — so it gets the code the spec names for it.
+    """
+    if not 1 <= value <= 28:
+        raise InvalidMonthStartDayError(value)
+    return value
+
+
+MonthStartDay = Annotated[int, AfterValidator(_check_month_start_day)]
 
 
 class CategoryTemplateOut(BaseModel):
@@ -57,7 +77,7 @@ class PreviewBudgetIn(BaseModel):
     """
 
     monthly_income_minor: int = Field(ge=0)
-    month_start_day: int = Field(ge=1, le=28)
+    month_start_day: MonthStartDay
     timezone: str = DEFAULT_TIMEZONE
     selected_expense_template_keys: list[str] = Field(min_length=1)
 
@@ -127,7 +147,7 @@ class OnboardingProfileIn(BaseModel):
     timezone: str = DEFAULT_TIMEZONE
     preferred_currency_code: str = Field(default="INR", min_length=3, max_length=3)
     monthly_income_minor: int = Field(ge=0)
-    month_start_day: int = Field(ge=1, le=28)
+    month_start_day: MonthStartDay
 
 
 class OnboardingCategoryIn(BaseModel):
@@ -193,7 +213,7 @@ class OnboardingBudgetIn(BaseModel):
         # belongs at the edge; the CHECK stays the backstop.
         total = self.pct_needs + self.pct_wants + self.pct_future + self.pct_debt
         if total != 100:
-            raise ValueError(f"bucket percentages must sum to 100, got {total}")
+            raise BucketPercentagesInvalidError(total)
         return self
 
     @model_validator(mode="after")

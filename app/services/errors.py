@@ -17,13 +17,26 @@ class DomainError(Exception):
 
 
 class UnauthenticatedError(DomainError):
-    """Missing, malformed or expired token. Raised by `app/auth.py`, not by a service.
+    """Missing, malformed or forged token. Raised by `app/auth.py`, not by a service.
 
     It lives here so the API has one error vocabulary rather than two.
     """
 
     code = "unauthenticated"
     status_code = 401
+
+
+class TokenExpiredError(UnauthenticatedError):
+    """Valid signature, expired token.
+
+    Split from `unauthenticated` because the two need opposite responses from the client:
+    this one is fixed by refreshing the Supabase session, and the client can do that
+    without showing anybody a login screen. Collapsing them sends a user with a merely
+    stale token back to sign-in, which is the same outcome as a forged token for a
+    condition that happens to every session on a timer.
+    """
+
+    code = "token_expired"
 
 
 class AuthUnavailableError(DomainError):
@@ -89,3 +102,80 @@ class RuleViolationError(DomainError):
 
     code = "rule_violation"
     status_code = 422
+
+
+class InvalidMonthStartDayError(DomainError):
+    """`month_start_day` outside 1..28.
+
+    Named rather than folded into `validation_failed` because the client shows a specific
+    correction for it, and because the bound is not arbitrary: 29, 30 and 31 do not occur
+    in February, so a period starting on one of them would have no start in some months.
+
+    Raised at the edge — it is a range check, which is Pydantic's layer — but with its own
+    code, because "must be 1..28 so every month has one" is a rule a user can act on and
+    "validation failed" is not.
+    """
+
+    code = "invalid_month_start_day"
+    status_code = 422
+
+    def __init__(self, value: int, *, field: str = "month_start_day") -> None:
+        super().__init__(
+            f"month_start_day must be between 1 and 28, got {value}.", field=field
+        )
+
+
+class BucketPercentagesInvalidError(DomainError):
+    """The four bucket percentages do not sum to 100.
+
+    Cross-field shape, so it is checked at the edge; `period_pct_sums_to_100` stays the
+    database backstop. Distinct from `validation_failed` because the client can name the
+    four fields involved and show the running total.
+    """
+
+    code = "bucket_percentages_invalid"
+    status_code = 422
+
+    def __init__(self, total: int) -> None:
+        super().__init__(
+            f"Bucket percentages must sum to 100, got {total}.", field="budget"
+        )
+
+
+class CurrencyNotSupportedError(DomainError):
+    """A currency that is not enabled in the `currency` reference table.
+
+    Needs another row to decide, so it is a service rule rather than a `Literal["INR"]` at
+    the edge — enabling a second currency stays a data change.
+    """
+
+    code = "currency_not_supported"
+    status_code = 422
+
+    def __init__(self, code_requested: str) -> None:
+        super().__init__(
+            f"{code_requested} is not a supported currency.",
+            field="preferred_currency_code",
+        )
+
+
+class IncomeCategoryNotBudgetableError(DomainError):
+    """A budget limit aimed at an income category.
+
+    409 rather than 422: the request is well-formed and the conflict is with the state of
+    the category it points at. Mirrors the `budget_limit_budgetable` trigger, which spans
+    two tables and so cannot be a CHECK.
+    """
+
+    code = "income_category_not_budgetable"
+    status_code = 409
+
+
+class ExcludedCategoryNotBudgetableError(DomainError):
+    """A budget limit aimed at an EXCLUDED-bucket category.
+
+    EXCLUDED is a categorisation, never an allocation. Same trigger, same reason for 409.
+    """
+
+    code = "excluded_category_not_budgetable"
+    status_code = 409
