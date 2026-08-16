@@ -5,15 +5,31 @@ Each carries a stable snake_case `code` — that is what the client branches on.
 here, so the mapping lives next to the meaning instead of being repeated per router.
 """
 
+from typing import Any
+
 
 class DomainError(Exception):
+    """`details` is optional and stays `None` for almost every error.
+
+    It exists for conflicts whose answer is structured rather than prose — the categories a
+    near-duplicate matched, the count that blocked a delete. An error whose meaning fits in
+    `code` should not populate it, and nothing should ever put the message there twice.
+    """
+
     code = "internal_error"
     status_code = 500
 
-    def __init__(self, message: str, *, field: str | None = None) -> None:
+    def __init__(
+        self,
+        message: str,
+        *,
+        field: str | None = None,
+        details: dict[str, Any] | None = None,
+    ) -> None:
         super().__init__(message)
         self.message = message
         self.field = field
+        self.details = details
 
 
 class UnauthenticatedError(DomainError):
@@ -156,10 +172,209 @@ class VersionConflictError(DomainError):
     code = "version_conflict"
     status_code = 409
 
-    def __init__(self, expected: int, actual: int) -> None:
+    def __init__(self, expected: int, actual: int, entity: str = "Profile") -> None:
         super().__init__(
-            f"Profile has version {actual}, but If-Match asked for {expected}.",
+            f"{entity} has version {actual}, but If-Match asked for {expected}.",
             field="If-Match",
+        )
+
+
+class DuplicateCategoryNameError(DomainError):
+    """An exact name clash within one kind. Case-insensitive, whitespace-trimmed.
+
+    **Not overridable.** `force: true` does not bypass it, and that asymmetry against
+    `near_duplicate_category` is the whole design (spec decision 1486): a near-duplicate is
+    a speed bump, an exact duplicate is two categories the user could never tell apart in
+    the entry grid.
+
+    `category_unique_name` is the backstop. A `23505` from it is translated to this rather
+    than surfacing, because a user cannot act on a SQLSTATE.
+    """
+
+    code = "duplicate_category_name"
+    status_code = 409
+
+    def __init__(self, name: str, kind: str) -> None:
+        super().__init__(
+            f"A {kind} category named {name!r} already exists.", field="name"
+        )
+
+
+class AccountNotFoundError(NotFoundError):
+    """No such account, or it belongs to another user.
+
+    404 for someone else's row too, never 403 — a 403 confirms the id exists (api.md).
+    """
+
+    code = "account_not_found"
+
+    def __init__(self, message: str = "Account does not exist.") -> None:
+        super().__init__(message)
+
+
+class DuplicateAccountNameError(DomainError):
+    """An exact name clash among this user's live, unarchived accounts.
+
+    `account_unique_name` is the backstop and a 23505 from it is translated to this, because
+    a user cannot act on a SQLSTATE. No near-duplicate arm here, unlike categories: with two
+    or three accounts in normal use (delta D3) there is no sprawl to guard against, and
+    "Savings" beside "Savings 2" is a distinction people make on purpose.
+    """
+
+    code = "duplicate_account_name"
+    status_code = 409
+
+    def __init__(self, name: str) -> None:
+        super().__init__(f"An account named {name!r} already exists.", field="name")
+
+
+class OpeningBalanceLockedError(DomainError):
+    """The opening amount cannot change once the account has a transaction.
+
+    A `balance_anchor` row is an immutable observation (0005), and the schema enforces the
+    rest: `anchor_one_opening_per_account` allows a single opening anchor, and
+    `anchor_gap_required_unless_opening` requires any later one to carry an estimate and a
+    gap — which is the Phase-2 capture-rate machinery, not something to fake here.
+
+    So the amount stays editable while it is still only a claim about a starting point, and
+    freezes the moment spending is measured against it. Correcting it after that is a Phase-2
+    reconciliation, which posts the difference as an adjustment rather than rewriting history.
+    """
+
+    code = "opening_balance_locked"
+    status_code = 409
+
+    def __init__(self, transaction_count: int) -> None:
+        super().__init__(
+            "The opening amount is fixed once the account has transactions.",
+            field="opening_balance_minor",
+            details={"transaction_count": transaction_count},
+        )
+
+
+class NearDuplicateCategoryError(DomainError):
+    """A similar name, or one sharing a synonym group. Overridable with `force: true`.
+
+    `details.matches[]` carries the id and name of every match, which is what lets the
+    sheet offer "Use Food" instead of making the user go and find it. Without that payload
+    the client would have to re-run the similarity rule locally — the exact
+    reimplementation the frontend's CLAUDE.md calls this project's failure mode.
+    """
+
+    code = "near_duplicate_category"
+    status_code = 409
+
+    def __init__(self, name: str, matches: list[dict[str, Any]]) -> None:
+        super().__init__(
+            f"{name!r} is close to a category that already exists.",
+            field="name",
+            details={"matches": matches, "overridable": True},
+        )
+
+
+class PinLimitReachedError(DomainError):
+    """A fifth pin within one kind.
+
+    Four per kind, counted separately for income and expense (spec 1346, decision 1484), so
+    four expense pins do not consume the income tab's allowance. Enforced by the
+    `category_pin_limit()` trigger, which raises a bare `PIN_LIMIT_REACHED` under `P0001`;
+    the repository classifies it and this is what the user sees.
+    """
+
+    code = "pin_limit_reached"
+    status_code = 409
+
+    def __init__(self) -> None:
+        super().__init__(
+            "Four pinned categories per kind is the limit.", field="is_pinned"
+        )
+
+
+class SystemCategoryImmutableError(DomainError):
+    """Any change to a system category.
+
+    Unreachable through the API in Phase 1 — decision 1485 puts the system 'Unaccounted'
+    category in Phase 2 — but the guard ships now because the column exists and the seed
+    that fills it is a data change, not a release.
+    """
+
+    code = "system_category_immutable"
+    status_code = 409
+
+    def __init__(self) -> None:
+        super().__init__("System categories cannot be changed.", field="category_id")
+
+
+class MergeIntoSelfError(DomainError):
+    code = "merge_into_self"
+    status_code = 409
+
+    def __init__(self) -> None:
+        super().__init__(
+            "A category cannot be merged into itself.", field="target_category_id"
+        )
+
+
+class CategoryNotEmptyError(DomainError):
+    """Hard delete refused.
+
+    `details.total_transaction_count` is the **historical** count — every `txn` row that
+    ever pointed here, soft-deleted ones included — not the live figure the list returns.
+    They differ on purpose: `txn.category_id` has no cascade, so a soft-deleted row still
+    physically references the category and still blocks the delete. Reporting the live
+    count here would produce "0 transactions still use this category", which is both untrue
+    and unactionable.
+
+    `blocked_by` says which rule refused, because the two have different remedies: a
+    transaction means archive or merge, a past-period budget limit means the allocation
+    history is load-bearing and nothing will make the delete safe.
+    """
+
+    code = "category_not_empty"
+    status_code = 409
+
+    def __init__(self, total_transaction_count: int, blocked_by: str) -> None:
+        super().__init__(
+            "This category has history and cannot be deleted.",
+            field="category_id",
+            details={
+                "total_transaction_count": total_transaction_count,
+                "blocked_by": blocked_by,
+                "alternatives": ["archive", "merge"],
+            },
+        )
+
+
+class UnknownIconTokenError(DomainError):
+    """An icon that is not an enabled `icon_asset`.
+
+    422 rather than 409: this is a bad value in the request, not a conflict with stored
+    state. Strict here so the read path's fallback stays a safety net — see
+    `services/icon_catalog.py`.
+    """
+
+    code = "unknown_icon_token"
+    status_code = 422
+
+    def __init__(self, token: str) -> None:
+        super().__init__(f"{token!r} is not a known icon.", field="icon")
+
+
+class CategoryHasBudgetLimitsError(DomainError):
+    """`kind` or `default_bucket` moved somewhere a budget limit cannot follow.
+
+    Mirrors the `category_stays_budgetable` trigger (0002). Not in the written spec: making
+    a limit-holding category EXCLUDED raises `CATEGORY_HAS_BUDGET_LIMITS` in the database,
+    and without this the user would meet a 500.
+    """
+
+    code = "category_has_budget_limits"
+    status_code = 409
+
+    def __init__(self) -> None:
+        super().__init__(
+            "This category holds a budget limit and cannot become unbudgetable.",
+            field="default_bucket",
         )
 
 

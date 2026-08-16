@@ -47,6 +47,12 @@ def list_offered_templates(db: Session) -> list[RowDict]:
     category that can never hold a budget limit — the trigger would reject the limit and the
     user would see a 500 for a choice the screen invited.
 
+    `is_starter` is what keeps this list at twelve. 0012 added a wider preset set as
+    suggestions, offered from Settings once an account exists rather than during onboarding —
+    those carry no `suggested_share_pct`, and `services.onboarding.build_preview` divides each
+    bucket's target among its members by share, so offering them here would hand a share of
+    Rent's money to a category the user has not asked for.
+
     Ordered by `(kind, sort_order, template_key)`: `sort_order` restarts at 1 for income, so
     ordering by it alone is non-deterministic across kinds.
 
@@ -68,6 +74,7 @@ def list_offered_templates(db: Session) -> list[RowDict]:
         )
         .where(
             CategoryTemplate.is_active.is_(True),
+            CategoryTemplate.is_starter.is_(True),
             CategoryTemplate.sort_order < RESERVED_TEMPLATE_SORT_ORDER,
         )
         .order_by(

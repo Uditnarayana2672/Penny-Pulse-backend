@@ -44,8 +44,11 @@ def _split_top_level(body: str) -> list[str]:
 
 
 def _parse_migrations() -> dict[str, list[str]]:
+    # `0*.sql`, not `000*.sql`: the narrower glob silently stopped matching at 0009, so
+    # 0010 and everything after it was invisible to this file. 0010 adds no tables, which
+    # is why nothing caught it until 0011 did.
     sql = _strip_comments(
-        "\n".join(f.read_text(encoding="utf-8") for f in sorted(MIGRATIONS.glob("000*.sql")))
+        "\n".join(f.read_text(encoding="utf-8") for f in sorted(MIGRATIONS.glob("0*.sql")))
     )
     tables: dict[str, list[str]] = {}
     for match in re.finditer(r"CREATE TABLE (?:IF NOT EXISTS )?(\w+)\s*\(", sql):
@@ -63,15 +66,34 @@ def _parse_migrations() -> dict[str, list[str]]:
             if item and item.split()[0].lower() not in TABLE_LEVEL:
                 columns.append(item.split()[0].strip('"'))
         tables[match.group(1)] = columns
+
+    # A column added after its table was created is still a column. 0012 adds
+    # `category_template.is_starter` this way, and reading only CREATE TABLE would report the
+    # model as having one column too many — the exact inversion of this file's purpose, which
+    # is to trust the SQL. Appended rather than inserted because that is where Postgres puts
+    # it, and this test compares ordered lists.
+    #
+    # Single-column form only. A comma-separated `ADD COLUMN a, ADD COLUMN b` would need
+    # splitting; no migration uses one, and a silent miss here would fail loudly in the test
+    # rather than pass quietly.
+    for table_name, column_name in re.findall(
+        r"ALTER TABLE\s+(?:public\.)?(\w+)\s+ADD COLUMN\s+(?:IF NOT EXISTS\s+)?(\w+)", sql
+    ):
+        if column_name not in tables[table_name]:
+            tables[table_name].append(column_name)
     return tables
 
 
 MIGRATION_TABLES = _parse_migrations()
 
 
-def test_the_migrations_still_create_sixty_one_tables():
-    """A changed count means a migration landed and the models have not caught up."""
-    assert len(MIGRATION_TABLES) == 61
+def test_the_migrations_still_create_sixty_four_tables():
+    """A changed count means a migration landed and the models have not caught up.
+
+    61 through 0010; 0011 adds `icon_pack`, `icon_asset` and `colour_swatch`. 0012 adds a
+    column rather than a table, so this count is deliberately unchanged by it.
+    """
+    assert len(MIGRATION_TABLES) == 64
 
 
 def test_every_table_has_exactly_one_model():

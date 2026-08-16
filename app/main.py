@@ -1,4 +1,5 @@
 import logging
+from typing import Any
 from uuid import uuid4
 
 from fastapi import FastAPI, Request
@@ -8,7 +9,7 @@ from fastapi.responses import JSONResponse
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from app.config import get_settings
-from app.routers import category, health, me, onboarding, txn
+from app.routers import account, category, health, icon_catalog, me, onboarding, txn
 from app.services.errors import DomainError
 
 API_PREFIX = "/api/v1"
@@ -35,20 +36,30 @@ app.include_router(me.router, prefix=API_PREFIX)
 app.include_router(onboarding.router, prefix=API_PREFIX)
 app.include_router(txn.router, prefix=API_PREFIX)
 app.include_router(category.router, prefix=API_PREFIX)
+app.include_router(icon_catalog.router, prefix=API_PREFIX)
+app.include_router(account.router, prefix=API_PREFIX)
 
 
 def error_response(
-    status_code: int, code: str, message: str, field: str | None = None
+    status_code: int,
+    code: str,
+    message: str,
+    field: str | None = None,
+    details: dict[str, Any] | None = None,
 ) -> JSONResponse:
-    body: dict[str, str] = {"code": code, "message": message}
+    body: dict[str, Any] = {"code": code, "message": message}
     if field is not None:
         body["field"] = field
+    # Omitted rather than sent as null, so `details` in a response always means there is
+    # something in it — the same rule `field` has followed since the first endpoint.
+    if details is not None:
+        body["details"] = details
     return JSONResponse(status_code=status_code, content={"error": body})
 
 
 @app.exception_handler(DomainError)
 def handle_domain_error(request: Request, exc: DomainError) -> JSONResponse:
-    return error_response(exc.status_code, exc.code, exc.message, exc.field)
+    return error_response(exc.status_code, exc.code, exc.message, exc.field, exc.details)
 
 
 @app.exception_handler(RequestValidationError)

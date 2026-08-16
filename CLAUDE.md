@@ -16,6 +16,34 @@ pytest                                             # all tests
 pytest -k txn -x                                   # one area, stop on first failure
 ```
 
+## Prerequisites
+
+`pytest` alone runs the service and lib tests against no database. The repository and router
+tests need `TEST_DATABASE_URL` and **skip** without it, so a green run that says `skipped`
+has not touched the schema at all.
+
+Any local Postgres 17 works, and it needs no service, no admin rights and no installer — the
+EDB binaries zip is enough. A non-default port keeps it clear of anything already installed:
+
+```bash
+initdb   -D <data> -U postgres -A trust -E UTF8 --locale=C
+pg_ctl   -D <data> -l <log> -o "-p 55432 -c listen_addresses=127.0.0.1" start
+createdb -h 127.0.0.1 -p 55432 -U postgres penny_pulse_test
+
+TEST_DATABASE_URL=postgresql+psycopg://postgres@127.0.0.1:55432/penny_pulse_test pytest
+```
+
+`conftest` then drops `public`, shims the `auth` schema Supabase owns, and applies
+`../penny-pulse-migrations/0*.sql` in order, so the CHECKs, triggers, generated columns and
+DEFERRABLE constraints under test are production's. It **refuses** — never skips — a URL that
+is not local or whose database name does not end in `_test`, because it drops schemas.
+
+Migrations are applied through the raw DBAPI cursor with no parameters. `exec_driver_sql`
+passes an empty parameter collection, which turns on psycopg's `%` placeholder scanner and
+makes any file containing a literal `%` fail before it is sent — `100%` in a comment in
+`0003`, `format('%I', ...)` in `0008`, `LIKE '%:%'` in `0011`. Escaping the migrations to
+suit the harness would mean testing a file production does not run.
+
 ## The five that are unrecoverable
 
 1. **Every query filters by `user_id`.** SQLAlchemy connects straight to Postgres over

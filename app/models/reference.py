@@ -2,6 +2,7 @@ from datetime import datetime as DateTimeType
 from uuid import UUID
 
 from sqlalchemy import CHAR, Boolean, DateTime, Integer, SmallInteger, Text
+from sqlalchemy.dialects.postgresql import ARRAY
 from sqlalchemy.dialects.postgresql import UUID as PgUUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -38,6 +39,10 @@ class CategoryTemplate(Base):
     suggested_share_pct: Mapped[int | None] = mapped_column(SmallInteger)
     sort_order: Mapped[int] = mapped_column(SmallInteger)
     is_active: Mapped[bool] = mapped_column(Boolean)
+    # Added by 0012. TRUE = onboarding offers it; FALSE = it is a suggestion, offered from
+    # Settings once the account exists. Distinct from `is_active`, which retires a template
+    # for everyone.
+    is_starter: Mapped[bool] = mapped_column(Boolean)
 
 
 class AnalysisBlock(Base):
@@ -99,3 +104,55 @@ class FeatureFlag(Base):
     )
     enabled: Mapped[bool] = mapped_column(Boolean)
     updated_at: Mapped[DateTimeType] = mapped_column(DateTime(timezone=True))
+
+
+class IconPack(Base):
+    """Mirrors `icon_pack` in 0011_icon_catalog.sql.
+
+    `renderer` is per pack rather than per asset, so the client switches on it once and
+    every asset in the pack draws the same way.
+    """
+
+    __tablename__ = "icon_pack"
+
+    pack_key: Mapped[str] = mapped_column(Text, primary_key=True)
+    label: Mapped[str] = mapped_column(Text)
+    renderer: Mapped[str] = mapped_column(Text)
+    is_enabled: Mapped[bool] = mapped_column(Boolean)
+    min_app_build: Mapped[int | None] = mapped_column(Integer)
+    sort_order: Mapped[int] = mapped_column(SmallInteger)
+
+
+class IconAsset(Base):
+    """Mirrors `icon_asset` in 0011_icon_catalog.sql.
+
+    `token` is the namespaced value stored on `category.icon` (`tabler:utensils`).
+    `render_value` is what the pack's renderer draws, and is served to the client so no
+    token-to-glyph table has to exist there.
+    """
+
+    __tablename__ = "icon_asset"
+
+    token: Mapped[str] = mapped_column(Text, primary_key=True)
+    pack_key: Mapped[str] = mapped_column(Text)
+    render_value: Mapped[str] = mapped_column(Text)
+    label: Mapped[str] = mapped_column(Text)
+    keywords: Mapped[list[str]] = mapped_column(ARRAY(Text))
+    kind_hint: Mapped[str | None] = mapped_column(Text)
+    is_enabled: Mapped[bool] = mapped_column(Boolean)
+    sort_order: Mapped[int] = mapped_column(SmallInteger)
+
+
+class ColourSwatch(Base):
+    """Mirrors `colour_swatch` in 0011_icon_catalog.sql.
+
+    A curated palette, not a constraint: `category.colour` remains free TEXT, because the
+    migration that created it declared no CHECK and the models mirror the SQL.
+    """
+
+    __tablename__ = "colour_swatch"
+
+    hex: Mapped[str] = mapped_column(Text, primary_key=True)
+    label: Mapped[str] = mapped_column(Text)
+    is_enabled: Mapped[bool] = mapped_column(Boolean)
+    sort_order: Mapped[int] = mapped_column(SmallInteger)

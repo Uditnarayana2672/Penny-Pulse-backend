@@ -110,6 +110,30 @@ def _migration_files() -> list[Path]:
     return files
 
 
+def _apply_verbatim(engine: object, sql: str) -> None:
+    """Send SQL exactly as written, with no client-side placeholder parsing.
+
+    `exec_driver_sql` hands psycopg an empty parameter collection, and that is what switches
+    on its `%` placeholder scanner: a literal `%` anywhere in the file then raises
+    "incomplete placeholder" before a single byte reaches the server. Three migrations carry
+    one legitimately — `100%` inside a comment in 0003, `format('%I', ...)` in 0008's policy
+    loop, and `LIKE '%:%'` in 0011's backfill — so this is not a niche case, it is most of
+    the schema. Omitting the parameters entirely is what makes psycopg send the string
+    through untouched.
+
+    Doubling the `%` in the migrations instead would be the wrong repair: the Supabase CLI
+    applies those files literally, so a file edited to suit this harness would no longer be
+    the file production runs.
+    """
+    raw = engine.raw_connection()  # type: ignore[attr-defined]
+    try:
+        with raw.cursor() as cursor:
+            cursor.execute(sql)
+        raw.commit()
+    finally:
+        raw.close()
+
+
 @pytest.fixture(scope="session")
 def engine(database_url: str) -> Iterator[object]:
     """A migrated Postgres, rebuilt once per session from the real SQL files.
@@ -140,14 +164,12 @@ def engine(database_url: str) -> Iterator[object]:
             f"Connected to {actual_name!r} but TEST_DATABASE_URL names {expected_name!r}."
         )
 
-    with built.begin() as connection:
-        connection.exec_driver_sql(SUPABASE_SHIM)
+    _apply_verbatim(built, SUPABASE_SHIM)
 
     for path in _migration_files():
-        with built.begin() as connection:
-            # The whole file at once: dollar-quoted function bodies make splitting on
-            # semicolons wrong, and psycopg accepts a multi-statement string.
-            connection.exec_driver_sql(path.read_text(encoding="utf-8"))
+        # The whole file at once: dollar-quoted function bodies make splitting on
+        # semicolons wrong, and psycopg accepts a multi-statement string.
+        _apply_verbatim(built, path.read_text(encoding="utf-8"))
 
     yield built
     built.dispose()

@@ -41,6 +41,7 @@ def row(name: str, *, usage: int = 0, pinned: bool = False, **overrides):
         "updated_at": NOW,
         "version": 1,
         "total_transaction_count": 0,
+        "last_txn_at": None,
         "usage_count_30d": usage,
         "period_transaction_count": 0,
         "period_spent_minor": 0,
@@ -50,6 +51,19 @@ def row(name: str, *, usage: int = 0, pinned: bool = False, **overrides):
 
 def names(rows) -> list[str]:
     return [str(item["name"]) for item in rows]
+
+
+# The catalog `list_out` resolves icons against. Only `tabler:dots` is seeded here, so the
+# rows above — which carry the pre-0011 bare token `dots` — exercise the tolerant resolver
+# on every assertion rather than in one test that remembers to.
+ICONS = {
+    "tabler:dots": {
+        "token": "tabler:dots",
+        "pack_key": "tabler",
+        "render_value": "ti ti-dots",
+        "is_enabled": True,
+    }
+}
 
 
 # ---------- the usage window ----------
@@ -171,6 +185,7 @@ def test_stats_are_withheld_unless_asked_for():
         budget_period_id=uuid4(),
         sort="entry_order",
         with_stats=False,
+        icons_by_token=ICONS,
     )
 
     assert result.items[0].stats is None
@@ -189,6 +204,7 @@ def test_the_ranking_still_orders_the_grid_when_stats_are_off():
         budget_period_id=None,
         sort="entry_order",
         with_stats=False,
+        icons_by_token=ICONS,
     )
 
     assert [item.name for item in result.items] == ["Food", "Bills"]
@@ -203,6 +219,7 @@ def test_stats_carry_the_rank_when_asked_for():
         budget_period_id=uuid4(),
         sort="entry_order",
         with_stats=True,
+        icons_by_token=ICONS,
     )
 
     stats = result.items[0].stats
@@ -223,6 +240,7 @@ def test_the_total_count_is_present_whether_or_not_stats_were_asked_for():
             budget_period_id=None,
             sort="name",
             with_stats=with_stats,
+            icons_by_token=ICONS,
         )
         assert result.items[0].total_transaction_count == 214
 
@@ -237,6 +255,7 @@ def test_short_label_survives_to_the_wire_though_no_spec_mentions_it():
         budget_period_id=None,
         sort="name",
         with_stats=False,
+        icons_by_token=ICONS,
     )
 
     assert result.items[0].short_label == "Grocery"
@@ -250,6 +269,7 @@ def test_a_missing_short_label_stays_null_rather_than_becoming_the_string_none()
         budget_period_id=None,
         sort="name",
         with_stats=False,
+        icons_by_token=ICONS,
     )
 
     assert result.items[0].short_label is None
@@ -263,6 +283,7 @@ def test_the_second_page_is_never_offered_in_phase_one():
         budget_period_id=None,
         sort="name",
         with_stats=False,
+        icons_by_token=ICONS,
     )
 
     assert result.next_cursor is None
@@ -276,6 +297,7 @@ def test_an_income_category_carries_no_bucket_or_flexibility():
         budget_period_id=None,
         sort="name",
         with_stats=False,
+        icons_by_token=ICONS,
     )
 
     assert result.items[0].default_bucket is None

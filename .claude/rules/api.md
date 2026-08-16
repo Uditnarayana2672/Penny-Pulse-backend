@@ -24,11 +24,22 @@ money arithmetic.
 Always this envelope, no exceptions:
 
 ```json
-{"error": {"code": "snake_case_code", "message": "human readable", "field": "amount_minor"}}
+{"error": {"code": "snake_case_code", "message": "human readable", "field": "amount_minor",
+           "details": {}}}
 ```
 
 `code` is stable and machine-readable; `message` is for logs, not for UI copy — the client
 owns its own wording.
+
+`field` and `details` are both optional and are **omitted entirely** when absent, never
+sent as `null`. `details` carries structured facts about a conflict that the client cannot
+obtain any other way — the categories a near-duplicate matched and their ids (6.2), the
+count that blocked a hard delete (6.6). It is not a second place to put the message, and
+not somewhere to echo a resource the client can simply re-read: `version_conflict`
+deliberately sends no `details` for that reason.
+
+Before adding `details` to an error, ask whether the client could answer the question with
+a request it was going to make anyway. If it could, leave it out.
 
 | Status | Use |
 |---|---|

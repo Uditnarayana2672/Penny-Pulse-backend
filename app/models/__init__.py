@@ -1,4 +1,4 @@
-"""All 61 tables and 8 `*_live` views from ../penny-pulse-migrations/000*.sql.
+"""All 64 tables and 8 `*_live` views from ../penny-pulse-migrations/0*.sql.
 
 Grouped by the migration that creates them, not by phase, so that a column
 question has exactly one place to go: the file named in each class docstring.
@@ -99,9 +99,12 @@ from app.models.profile import Profile, ProfileLive
 from app.models.reference import (
     AnalysisBlock,
     CategoryTemplate,
+    ColourSwatch,
     Currency,
     FeatureFlag,
     FeatureFlagDefinition,
+    IconAsset,
+    IconPack,
     SynonymGroup,
 )
 
@@ -115,6 +118,10 @@ __all__ = [
     "SynonymGroup",
     "FeatureFlagDefinition",
     "FeatureFlag",
+    # 0011 — icon catalog
+    "IconPack",
+    "IconAsset",
+    "ColourSwatch",
     # 0002 — core money
     "Profile",
     "Account",
